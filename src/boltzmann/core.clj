@@ -23,6 +23,11 @@
 (def weight-sd 0.03)
 (def test-iterations 10)
 
+(defn map-rec [f c & args]
+  (if (sequential? c)
+    (apply map (partial map-rec f) c args)
+    (apply f c args)))
+
 (defn activations-from-csv-row [[label-string & pixel-strings]]
   (let [label (Integer. label-string)
         pixels (map #(/ (Integer. %) 255.0) pixel-strings)]
@@ -71,9 +76,6 @@
 (defn vsig [v]
   (fmap logistic-sigmoid v))
 
-(defn middle [v]
-  (-> v rest drop-last vec))
-
 (defn trans-mv [a v]
   (mv (trans a) v))
 ;;use first, then middle, then last
@@ -116,22 +118,19 @@
 (defn func-power [f n]
   (apply comp (repeat n f)))
 
-(defn map-params [f [in1 hidden1 out1] [in2 hidden2 out2]]
-  [(f in1 in2) (map f hidden1 hidden2) (f out1 out2)])
-
 (defn training-iteration [[[weights biases :as params] activations-list] index]
   (let [awake-activations ((func-power (partial awake-gibbs params) awake-iterations)
                             (activations-list index))
         dream-activations ((func-power (partial dream-gibbs params) dream-iterations)
                             awake-activations)
-        weight-update (map-params #(scal learning-rate (xpy %1 (scal -1.0 %2)))
+        weight-update (map-rec #(scal learning-rate (xpy %1 (scal -1.0 %2)))
                                    (weight-diff awake-activations)
                                    (weight-diff dream-activations))
-        bias-update (map-params #(scal learning-rate (xpy %1 (scal -1.0 %2)))
+        bias-update (map-rec #(scal learning-rate (xpy %1 (scal -1.0 %2)))
                                 awake-activations
                                 dream-activations)]
-    [[(map-params xpy weights weight-update)
-      (map-params xpy biases bias-update)]
+    [[(map-rec xpy weights weight-update)
+      (map-rec xpy biases bias-update)]
      (assoc activations-list index awake-activations)]))
 
 (defn training-epoch [training-data]
@@ -152,4 +151,4 @@
   "I don't do a whole lot ... yet."
   [& args]
   (println (count initial-activations))
-  (-> [initial-params initial-activations] ((func-power training-epoch 20)) first test-all))
+  (-> [initial-params initial-activations] ((func-power training-epoch 3)) first test-all))
