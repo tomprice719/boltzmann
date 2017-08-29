@@ -1,5 +1,5 @@
 (ns boltzmann.core
-  (:require [uncomplicate.neanderthal.core :refer [imax scal sum axpy rk entry! mv trans xpy]]
+  (:require [uncomplicate.neanderthal.core :refer [imax scal sum axpy rk entry! mv trans xpy axpby!]]
             [uncomplicate.neanderthal.native :refer [dv dge]]
             [uncomplicate.neanderthal.real :refer [entry]]
             [uncomplicate.fluokitten.core :refer [fmap]]
@@ -18,15 +18,44 @@
 (def input-size (* 28 28))
 (def awake-iterations 1)
 (def dream-iterations 5)
-(def learning-rate 0.001)
+(def learning-rate 0.00001)
 (def num-training-examples 60000) ;; actually 60000
-(def weight-sd 0.03)
+(def input-weight-sd 0.03)
+(def output-weight-sd 0.3)
 (def test-iterations 10)
+(def fisher-decay 0.99)
 
 (defn map-rec [f c & args]
   (if (sequential? c)
     (apply map (partial map-rec f) c args)
     (apply f c args)))
+
+(defn occasionally [base f]
+  (let [a (atom 0)
+        b (atom 1)]
+    (fn []
+      (swap! a inc)
+      (if (> @a @b)
+        (do (swap! b (partial * base))
+            (f a))))))
+
+(def occasionally-counts (atom {}))
+
+(defn get-or-initialize [key hash-atom default]
+  (if-let [x (@hash-atom key)]
+    x
+    (do (swap! hash-atom #(assoc % key default))
+        default)))
+
+(defmacro occasionally [base form]
+  `(let [[x# y#] (get-or-initialize
+                 (quote key#) occasionally-counts
+                 [(atom 0) (atom 1)])
+         ~'count @x#]
+     (if (> @x# @y#)
+       (do ~form
+           (swap! y# (partial * ~base))))
+     (swap! x# inc)))
 
 (defn activations-from-csv-row [[label-string & pixel-strings]]
   (let [label (Integer. label-string)
@@ -40,16 +69,17 @@
    [(dv (repeat hidden-width 0.5))]
    (dv (repeat 10 0.5))])
 
-(def initial-activations (->> "mnist_train.csv"
-                              slurp
-                              parse-csv
-                              (take num-training-examples)
-                              (map activations-from-csv-row)
-                              vec))
+(def initial-activations-list (->> "mnist_train.csv"
+                                   slurp
+                                   parse-csv
+                                   (take num-training-examples)
+                                   (map activations-from-csv-row)))
 
 (def initial-weights [(dge hidden-width input-size
-                           (map #(* % weight-sd) (sample-normal (* hidden-width input-size))))
-                      [] (dge 10 hidden-width)])
+                           (map #(* % input-weight-sd) (sample-normal (* hidden-width input-size))))
+                      []
+                      (dge 10 hidden-width
+                           (map #(* % output-weight-sd) (sample-normal (* 10 hidden-width))))])
 
 (def initial-biases [(dv input-size) [(dv hidden-width)] (dv 10)])
 
@@ -57,6 +87,19 @@
 
 (defn exp ^double [^double x]
   (Math/exp x))
+
+(defn primitive-square ^double [^double x]
+  (* x x))
+
+(defn primitive-divide ^double [^double x ^double y]
+  (/ x y ))
+
+(def add-rec (partial map-rec axpy))
+(def subtract-rec (partial map-rec #(axpy -1.0 %2 %1)))
+(def square-rec (partial map-rec (fmap primitive-square)))
+(def divide-rec (partial map-rec (fmap primitive-divide)))
+(defn scal-rec [alpha x]
+  (map-rec #(scal alpha %) x))
 
 (defn vexp [v]
   (fmap exp v))
@@ -110,7 +153,7 @@
    (map vsig (hidden-logits params activations))
    (softmax (out-logits params activations))])
 
-(defn weight-diff [[in-act hidden-act out-act]]
+(defn weight-activations [[in-act hidden-act out-act]]
   [(rk (first hidden-act) in-act)
    (map rk (rest hidden-act) (drop-last hidden-act))
    (rk out-act (last hidden-act))])
@@ -118,23 +161,68 @@
 (defn func-power [f n]
   (apply comp (repeat n f)))
 
-(defn training-iteration [[[weights biases :as params] activations-list] index]
+(defn ema-update! [decay-factor new old]
+  (axpby! (- 1 decay-factor) new decay-factor old))
+
+(defn moments [[activations weight-activations]]
+  [(square-rec weight-activations) weight-activations (square-rec activations) activations])
+
+(defn ema-moments [total-activations old]
+  (map-rec (partial ema-update! fisher-decay)
+           (moments total-activations)
+           old))
+
+(defn weight-fisher-diagonal [[weight-second-moment weight-mean bias-second-moment bias-mean]]
+  (subtract-rec weight-second-moment (square-rec weight-mean)))
+
+(defn bias-fisher-diagonal [[weight-second-moment weight-mean bias-second-moment bias-mean]]
+  (subtract-rec bias-second-moment (square-rec bias-mean)))
+
+(defn updated-params [fisher-diagonal awake-activations dream-activations old]
+  (add-rec
+    (divide-rec (scal-rec learning-rate
+                          (subtract-rec awake-activations dream-activations))
+                fisher-diagonal)
+    old))
+
+(defn training-iteration [[[weights biases :as params]
+                           moments
+                           activations-acc]
+                          next-activations]
   (let [awake-activations ((func-power (partial awake-gibbs params) awake-iterations)
-                            (activations-list index))
+                            next-activations)
         dream-activations ((func-power (partial dream-gibbs params) dream-iterations)
                             awake-activations)
-        weight-update (map-rec #(scal learning-rate (xpy %1 (scal -1.0 %2)))
-                                   (weight-diff awake-activations)
-                                   (weight-diff dream-activations))
-        bias-update (map-rec #(scal learning-rate (xpy %1 (scal -1.0 %2)))
-                                awake-activations
-                                dream-activations)]
-    [[(map-rec xpy weights weight-update)
-      (map-rec xpy biases bias-update)]
-     (assoc activations-list index awake-activations)]))
+        awake-weight-activations (weight-activations awake-activations)
+        dream-weight-activations (weight-activations dream-activations)
+        new-moments (ema-moments [dream-activations dream-weight-activations] moments)]
+    (occasionally 1.5 (println "hello" count))
+    [[(updated-params (weight-fisher-diagonal new-moments)
+                      awake-weight-activations dream-weight-activations weights)
+      (updated-params (bias-fisher-diagonal new-moments)
+                      awake-activations dream-activations biases)]
+     new-moments
+     (conj activations-acc awake-activations)]))
 
-(defn training-epoch [training-data]
-  (reduce training-iteration training-data (range num-training-examples)))
+(defn inference->moments [params initial-activations]
+  (let [awake-activations ((func-power (partial awake-gibbs params) awake-iterations)
+                            initial-activations)
+        dream-activations ((func-power (partial dream-gibbs params) dream-iterations)
+                            awake-activations)
+        dream-weight-activations (weight-activations dream-activations)]
+    (moments [dream-activations dream-weight-activations])))
+
+(def initial-moments
+  (let [chunk-size 1000]
+    (println "computing initial moments")
+    (scal-rec (/ 1.0 chunk-size)
+              (reduce add-rec
+                      (map (partial inference->moments initial-params)
+                           (take chunk-size initial-activations-list))))))
+
+(defn training-epoch [training-data activations-list]
+  (println "doing epoch")
+  (reduce training-iteration training-data initial-activations-list))
 
 (defn test-csv-row [params [label-string & pixel-strings]]
   (let [label (Integer. label-string)
@@ -148,7 +236,6 @@
   (println (count (filter identity (map (partial test-csv-row params) (parse-csv (slurp "mnist_test.csv")))))))
 
 (defn -main
-  "I don't do a whole lot ... yet."
   [& args]
-  (println (count initial-activations))
-  (-> [initial-params initial-activations] ((func-power training-epoch 3)) first test-all))
+  (println (map-rec #(vector (entry % 0 0) (entry % 1 1) (entry % 2 2)) (weight-fisher-diagonal initial-moments)))
+  (-> [initial-params initial-moments []] (training-epoch initial-activations-list) first test-all))
