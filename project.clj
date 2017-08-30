@@ -9,6 +9,7 @@
                  [uncomplicate/fluokitten "0.6.0"]
                  [clojure-csv/clojure-csv "2.0.1"]
                  [net.mikera/core.matrix "0.60.3"]]
+  :jvm-opts ["-XX:MaxJavaStackTraceDepth=-1"]
   :main ^:skip-aot boltzmann.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})

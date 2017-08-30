@@ -17,8 +17,8 @@
 (def ones (dv (repeat 10 1.0)))
 (def input-size (* 28 28))
 (def awake-iterations 1)
-(def dream-iterations 5)
-(def learning-rate 0.00001)
+(def dream-iterations 2)
+(def learning-rate 0.000001)
 (def num-training-examples 60000) ;; actually 60000
 (def input-weight-sd 0.03)
 (def output-weight-sd 0.3)
@@ -27,17 +27,8 @@
 
 (defn map-rec [f c & args]
   (if (sequential? c)
-    (apply map (partial map-rec f) c args)
+    (doall (apply map (partial map-rec f) c args))
     (apply f c args)))
-
-(defn occasionally [base f]
-  (let [a (atom 0)
-        b (atom 1)]
-    (fn []
-      (swap! a inc)
-      (if (> @a @b)
-        (do (swap! b (partial * base))
-            (f a))))))
 
 (def occasionally-counts (atom {}))
 
@@ -47,13 +38,13 @@
     (do (swap! hash-atom #(assoc % key default))
         default)))
 
-(defmacro occasionally [base form]
+(defmacro occasionally [base & forms]
   `(let [[x# y#] (get-or-initialize
                  (quote key#) occasionally-counts
                  [(atom 0) (atom 1)])
          ~'count @x#]
      (if (> @x# @y#)
-       (do ~form
+       (do ~@forms
            (swap! y# (partial * ~base))))
      (swap! x# inc)))
 
@@ -196,7 +187,8 @@
         awake-weight-activations (weight-activations awake-activations)
         dream-weight-activations (weight-activations dream-activations)
         new-moments (ema-moments [dream-activations dream-weight-activations] moments)]
-    (occasionally 1.5 (println "hello" count))
+    (occasionally 1.5 (println count)
+                  (println (weight-fisher-diagonal moments)))
     [[(updated-params (weight-fisher-diagonal new-moments)
                       awake-weight-activations dream-weight-activations weights)
       (updated-params (bias-fisher-diagonal new-moments)
@@ -237,5 +229,4 @@
 
 (defn -main
   [& args]
-  (println (map-rec #(vector (entry % 0 0) (entry % 1 1) (entry % 2 2)) (weight-fisher-diagonal initial-moments)))
   (-> [initial-params initial-moments []] (training-epoch initial-activations-list) first test-all))
