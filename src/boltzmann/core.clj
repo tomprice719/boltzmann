@@ -20,7 +20,7 @@
 
 (def thickness [1.0 [3.0] 5.0])
 
-(defn scaled-activations-from-csv-row [[label-string & pixel-strings]]
+(defn activations-from-csv-row [[label-string & pixel-strings]]
   (scal-rec thickness
             (let [label (Integer. label-string)
                   pixels (eager-map #(/ (Integer. %) 255.0) pixel-strings)]
@@ -28,11 +28,11 @@
                [(dv (repeat hidden-width 0.5))]
                (entry! (dv 10) label 1.0)])))
 
-(def initial-scaled-activations-list (->> "mnist_train.csv"
+(def initial-activations-list (->> "mnist_train.csv"
                                           slurp
                                           parse-csv
                                           (take num-training-examples)
-                                          (eager-map scaled-activations-from-csv-row)))
+                                          (eager-map activations-from-csv-row)))
 
 
 ;;TODO: initial SD dependent on thickness
@@ -48,25 +48,25 @@
 
 (def initial-optimizer
   (init-opt-A
-    (eager-map (partial infer-and-scale thickness initial-params)
-               (take 1000 initial-scaled-activations-list))))
+    (eager-map (partial infer thickness initial-params)
+               (take 1000 initial-activations-list))))
 
 (defn training-iteration [thickness [[params
                             optimizer]
-                           scaled-activations-acc]
-                          next-scaled-activations]
-  (let [[scaled-awake-unit-activations _ :as all-scaled-activations] (infer-and-scale thickness params next-scaled-activations)]
+                           activations-acc]
+                          next-activations]
+  (let [[awake-unit-activations _ :as all-activations] (infer thickness params next-activations)]
     (occasionally 1.5 (println count params))
-    [(update-params-and-optimizer optimizer params all-scaled-activations)
-     (conj scaled-activations-acc scaled-awake-unit-activations)]))
+    [(update-params-and-optimizer optimizer params all-activations)
+     (conj activations-acc awake-unit-activations)]))
 
-(defn training-epoch [thickness [[initial-params initial-optimizer] scaled-activations-list]]
+(defn training-epoch [thickness [[initial-params initial-optimizer] activations-list]]
   (println "doing epoch")
   (reduce (partial training-iteration thickness)
           [[initial-params initial-optimizer] []]
-          scaled-activations-list))
+          activations-list))
 
-(defn scaled-test-activations [pixels]
+(defn test-activations [pixels]
   (scal-rec thickness
             [(dv pixels)
              [(dv (repeat hidden-width 0.5))]
@@ -75,9 +75,9 @@
 (defn test-csv-row [params [label-string & pixel-strings]]
   (= (imax (output-probabilities params
                                  ((func-power
-                                    (partial scaled-test-gibbs thickness params)
+                                    (partial test-gibbs thickness params)
                                     test-iterations)
-                                   (scaled-test-activations
+                                   (test-activations
                                      (eager-map #(/ (Integer. %) 255.0) pixel-strings)))))
      (Integer. label-string)))
 
@@ -87,5 +87,5 @@
 
 (defn -main
   [& args]
-  (-> [[initial-params initial-optimizer] initial-scaled-activations-list]
+  (-> [[initial-params initial-optimizer] initial-activations-list]
       ((func-power (partial training-epoch thickness) num-epochs)) first first test-all))

@@ -17,12 +17,12 @@
 (defn ema-update! [decay-factor new old]
   (axpby! (- 1 decay-factor) new decay-factor old))
 
-(defn scaled-activations->grad [[scaled-awake-unit-activations
-                                    scaled-dream-unit-activations]]
-  [(subtract-rec (weight-activations scaled-awake-unit-activations)
-                 (weight-activations scaled-dream-unit-activations))
-   (subtract-rec scaled-awake-unit-activations
-                 scaled-dream-unit-activations)])
+(defn activations->grad [[awake-unit-activations
+                                    dream-unit-activations]]
+  [(subtract-rec (weight-activations awake-unit-activations)
+                 (weight-activations dream-unit-activations))
+   (subtract-rec awake-unit-activations
+                 dream-unit-activations)])
 
 (defn opt-A-param-update [second-moment gradient old]
   (add-rec
@@ -33,17 +33,17 @@
     old))
 
 (deftype opt-A [moments] optimizer
-  (update-params-and-optimizer [this old-params scaled-activations]
-    (let [grad (scaled-activations->grad scaled-activations)
+  (update-params-and-optimizer [this old-params activations]
+    (let [grad (activations->grad activations)
           new-moments (map-rec (partial ema-update! fisher-decay)
                                (square-rec grad)
                                moments)]
       [(eager-map opt-A-param-update new-moments grad old-params)
        (opt-A. new-moments)])))
 
-(defn init-opt-A [scaled-activations-list]
+(defn init-opt-A [activations-list]
   (opt-A.
-    (constant-scal-rec (/ 1.0 (count scaled-activations-list))
+    (constant-scal-rec (/ 1.0 (count activations-list))
                        (reduce add-rec
-                               (eager-map (comp square-rec scaled-activations->grad)
-                                          scaled-activations-list)))))
+                               (eager-map (comp square-rec activations->grad)
+                                          activations-list)))))
