@@ -5,21 +5,18 @@
 (def awake-iterations 1)
 (def dream-iterations 2)
 
-(defn in-logits [[[[in-weights hidden-weights out-weights]
-                   [in-biases hidden-biases out-biases]]
-                  _]
+(defn in-logits [[[in-weights hidden-weights out-weights]
+                  [in-biases hidden-biases out-biases]]
                  [in-act hidden-act out-act]]
   (xpy in-biases (trans-mv in-weights (first hidden-act))))
 
-(defn out-logits [[[[in-weights hidden-weights out-weights]
-                    [in-biases hidden-biases out-biases]]
-                   _]
+(defn out-logits [[[in-weights hidden-weights out-weights]
+                   [in-biases hidden-biases out-biases]]
                   [in-act hidden-act out-act]]
   (xpy out-biases (mv out-weights (last hidden-act))))
 
-(defn hidden-logits [[[[in-weights hidden-weights out-weights]
-                       [in-biases hidden-biases out-biases]]
-                      _]
+(defn hidden-logits [[[in-weights hidden-weights out-weights]
+                      [in-biases hidden-biases out-biases]]
                      [in-act hidden-act out-act]]
   (eager-map xpy
              (eager-map mv
@@ -30,34 +27,33 @@
                         (conj (rest hidden-act) out-act))
              hidden-biases))
 
-(defn scaled-awake-gibbs [[_ [in-thickness hidden-thickness out-thickness] :as params]
+(defn output-probabilities [params activations]
+  (softmax (out-logits params activations)))
+
+(defn scaled-awake-gibbs [[in-thickness hidden-thickness out-thickness]
+                          params
                           [in-act hidden-act out-act :as activations]]
   [in-act
    (eager-map #(scal %1 (vsig %2)) hidden-thickness (hidden-logits params activations))
    out-act])
 
-(defn scaled-dream-gibbs [[_ thickness :as params] activations]
+(defn scaled-dream-gibbs [thickness params activations]
   (scal-rec thickness
         [(vsig (in-logits params activations))
          (eager-map vsig (hidden-logits params activations))
-         (softmax (out-logits params activations))]))
+         (output-probabilities params activations)]))
 
-(defn scaled-test-gibbs [[_ [in-thickness hidden-thickness out-thickness] :as params]
+(defn scaled-test-gibbs [[in-thickness hidden-thickness out-thickness]
+                         params
                          [in-act hidden-act out-act :as activations]]
   [in-act
    (eager-map #(scal %1 (vsig %2)) hidden-thickness (hidden-logits params activations))
-   (scal out-thickness (softmax (out-logits params activations)))])
+   (scal out-thickness (output-probabilities params activations))])
 
-(defn test-gibbs [[_ [in-thickness hidden-thickness out-thickness] :as params]
-                         [in-act hidden-act out-act :as activations]]
-  [in-act
-   (eager-map vsig (hidden-logits params activations))
-   (softmax (out-logits params activations))])
-
-(defn infer-and-scale [params scaled-unit-activations]
-  (let [scaled-awake-unit-activations ((func-power (partial scaled-awake-gibbs params) awake-iterations)
+(defn infer-and-scale [thickness params scaled-unit-activations]
+  (let [scaled-awake-unit-activations ((func-power (partial scaled-awake-gibbs thickness params) awake-iterations)
                                  scaled-unit-activations)
-        scaled-dream-unit-activations ((func-power (partial scaled-dream-gibbs params) dream-iterations)
+        scaled-dream-unit-activations ((func-power (partial scaled-dream-gibbs thickness params) dream-iterations)
                                  scaled-awake-unit-activations)]
     [scaled-awake-unit-activations
      scaled-dream-unit-activations]))

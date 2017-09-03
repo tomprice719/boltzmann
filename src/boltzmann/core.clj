@@ -16,6 +16,7 @@
 (def weight-sd 0.03)
 (comment (def output-weight-sd 0.3))
 (def test-iterations 10)
+(def num-epochs 1)
 
 (def thickness [1.0 [3.0] 5.0])
 
@@ -33,6 +34,8 @@
                                           (take num-training-examples)
                                           (eager-map scaled-activations-from-csv-row)))
 
+
+;;TODO: initial SD dependent on thickness
 (def initial-weights [(dge hidden-width input-size
                            (eager-map #(* % weight-sd) (sample-normal (* hidden-width input-size))))
                       []
@@ -41,25 +44,27 @@
 
 (def initial-biases [(dv input-size) [(dv hidden-width)] (dv 10)])
 
-(def initial-params [[initial-weights initial-biases] thickness])
+(def initial-params [initial-weights initial-biases])
 
 (def initial-optimizer
   (init-opt-A
-    (eager-map (partial infer-and-scale initial-params)
+    (eager-map (partial infer-and-scale thickness initial-params)
                (take 1000 initial-scaled-activations-list))))
 
-(defn training-iteration [[[params
+(defn training-iteration [thickness [[params
                             optimizer]
                            scaled-activations-acc]
                           next-scaled-activations]
-  (let [[scaled-awake-unit-activations _ :as all-scaled-activations] (infer-and-scale params next-scaled-activations)]
+  (let [[scaled-awake-unit-activations _ :as all-scaled-activations] (infer-and-scale thickness params next-scaled-activations)]
     (occasionally 1.5 (println count params))
     [(update-params-and-optimizer optimizer params all-scaled-activations)
      (conj scaled-activations-acc scaled-awake-unit-activations)]))
 
-(defn training-epoch [[[initial-params initial-optimizer] scaled-activations-list]]
+(defn training-epoch [thickness [[initial-params initial-optimizer] scaled-activations-list]]
   (println "doing epoch")
-  (reduce training-iteration [[initial-params initial-optimizer] []] scaled-activations-list))
+  (reduce (partial training-iteration thickness)
+          [[initial-params initial-optimizer] []]
+          scaled-activations-list))
 
 (defn scaled-test-activations [pixels]
   (scal-rec thickness
@@ -68,12 +73,13 @@
              (dv (repeat 10 0.1))]))
 
 (defn test-csv-row [params [label-string & pixel-strings]]
-  (let [label (Integer. label-string)
-        pixels (eager-map #(/ (Integer. %) 255.0) pixel-strings)
-        [in-act hidden-act out-act] (test-gibbs params
-                                                ((func-power (partial scaled-test-gibbs params) test-iterations)
-                                                  (scaled-test-activations pixels)))]
-    (= (imax out-act) label)))
+  (= (imax (output-probabilities params
+                                 ((func-power
+                                    (partial scaled-test-gibbs thickness params)
+                                    test-iterations)
+                                   (scaled-test-activations
+                                     (eager-map #(/ (Integer. %) 255.0) pixel-strings)))))
+     (Integer. label-string)))
 
 (defn test-all [params]
   (println "testing...")
@@ -82,4 +88,4 @@
 (defn -main
   [& args]
   (-> [[initial-params initial-optimizer] initial-scaled-activations-list]
-      ((func-power training-epoch 20)) first first test-all))
+      ((func-power (partial training-epoch thickness) num-epochs)) first first test-all))

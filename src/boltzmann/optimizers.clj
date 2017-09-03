@@ -3,8 +3,8 @@
     [uncomplicate.neanderthal.core :refer [imax scal sum axpy rk entry! mv trans xpy axpby! amax]]
     [boltzmann.utils :refer :all]))
 
-(def learning-rate 0.0001)
-(def fisher-decay 0.99)
+(def learning-rate 0.001)
+(def fisher-decay 0.999)
 
 (defprotocol optimizer
   (update-params-and-optimizer [this params activations]))
@@ -33,13 +33,12 @@
     old))
 
 (deftype opt-A [moments] optimizer
-  (update-params-and-optimizer [this [old-wb thickness] scaled-activations]
+  (update-params-and-optimizer [this old-params scaled-activations]
     (let [grad (scaled-activations->grad scaled-activations)
           new-moments (map-rec (partial ema-update! fisher-decay)
                                (square-rec grad)
                                moments)]
-      [[(eager-map opt-A-param-update new-moments grad old-wb)
-        thickness]
+      [(eager-map opt-A-param-update new-moments grad old-params)
        (opt-A. new-moments)])))
 
 (defn init-opt-A [scaled-activations-list]
