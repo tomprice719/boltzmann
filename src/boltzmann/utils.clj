@@ -39,9 +39,13 @@
 (defn primitive-divide ^double [^double x ^double y]
   (/ x y ))
 
+(defn primitive-multiply ^double [^double x ^double y]
+  (* x y ))
+
 (defn add-rec [x y] (map-rec axpy x y))
 (defn subtract-rec [x y]  (map-rec #(axpy -1.0 %2 %1) x y))
-(defn square-rec [x] (map-rec (fmap primitive-square) x))
+(defn mult-rec [x y] (map-rec (fmap primitive-multiply) x y))
+(defn square-rec [x] (mult-rec x x))
 (defn divide-rec [x y]  (map-rec (fmap primitive-divide) x y))
 (defn constant-scal-rec [alpha x]
   (map-rec #(scal alpha %) x))
@@ -70,3 +74,6 @@
 
 (defn func-power [f n]
   (apply comp (repeat n f)))
+
+(defn unflatten [[head & tail]]
+  [head (butlast tail) (last tail)])
