@@ -13,10 +13,10 @@
 (def hidden-width 30)
 (def input-size (* 28 28))
 (def num-training-examples 60000)
-(def weight-sd 0.03)
+(def weight-sd 0.01)
 (comment (def output-weight-sd 0.3))
 (def test-iterations 10)
-(def num-epochs 1)
+(def num-epochs 5)
 
 (def thickness [1.0 [3.0] 5.0])
 
@@ -60,12 +60,6 @@
     [(update-params-and-optimizer optimizer params all-activations)
      (conj activations-acc awake-unit-activations)]))
 
-(defn training-epoch [thickness [[initial-params initial-optimizer] activations-list]]
-  (println "doing epoch")
-  (reduce (partial training-iteration thickness)
-          [[initial-params initial-optimizer] []]
-          activations-list))
-
 (defn test-activations [pixels]
   (scal-rec thickness
             [(dv pixels)
@@ -83,9 +77,18 @@
 
 (defn test-all [params]
   (println "testing...")
-  (println (count (filter identity (eager-map (partial test-csv-row params) (parse-csv (slurp "mnist_test.csv")))))))
+  (println "num correct: "
+    (count (filter identity (eager-map (partial test-csv-row params) (parse-csv (slurp "mnist_test.csv")))))))
+
+(defn training-epoch [thickness [[initial-params initial-optimizer] activations-list]]
+  (println "doing epoch")
+  (doto
+    (reduce (partial training-iteration thickness)
+            [[initial-params initial-optimizer] []]
+            activations-list)
+    ((comp test-all first first))))
 
 (defn -main
   [& args]
-  (-> [[initial-params initial-optimizer] initial-activations-list]
-      ((func-power (partial training-epoch thickness) num-epochs)) first first test-all))
+  ((func-power (partial training-epoch thickness) num-epochs)
+    [[initial-params initial-optimizer] initial-activations-list]))
